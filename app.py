@@ -196,15 +196,21 @@ def _baixar_arquivo_drive(file_id: str, destino: Path, rotulo: str = "arquivo") 
     return True
 
 
-@st.cache_resource(show_spinner="Carregando base de conhecimento...")
-def carregar_base():
+def preparar_arquivos_locais():
     """
-    Carrega chunks + embeddings uma única vez por sessão do servidor.
+    Garante que chunks.parquet e embeddings.npy existam localmente,
+    baixando do Google Drive se necessário.
 
-    Os IDs dos arquivos no Google Drive vêm de st.secrets (nunca ficam
-    hardcoded no código-fonte). Se os arquivos não existirem localmente,
-    baixa do Drive automaticamente na primeira execução. Downloads
-    subsequentes usam o arquivo já salvo em disco.
+    Executa FORA de qualquer cache do Streamlit — isso é proposital.
+    Elementos de interface (como a barra de progresso) criados dentro
+    de funções @st.cache_resource nem sempre são renderizados de forma
+    confiável, pois o cache foi projetado para retornar dados, não para
+    produzir UI. Rodando como código normal de script, a barra de
+    progresso aparece corretamente durante o download.
+
+    Retorna (caminho_chunks, caminho_embeddings) ou (None, None) em caso
+    de erro — a mensagem de erro já é exibida via st.error dentro desta
+    função.
     """
     drive_id_chunks = st.secrets.get("DRIVE_FILE_ID_CHUNKS", "")
     drive_id_embeddings = st.secrets.get("DRIVE_FILE_ID_EMBEDDINGS", "")
@@ -222,7 +228,10 @@ def carregar_base():
     arq_chunks = pasta / "chunks.parquet"
     arq_emb = pasta / "embeddings.npy"
 
+    # O check ".exists()" é barato — isso roda a cada rerun do script,
+    # mas só dispara o download de fato na primeira vez (arquivo ausente).
     if not arq_chunks.exists():
+        st.write("Preparando base de conhecimento (primeira execução)...")
         try:
             sucesso = _baixar_arquivo_drive(drive_id_chunks, arq_chunks, rotulo="chunks.parquet")
         except ValueError as e:
@@ -252,8 +261,21 @@ def carregar_base():
             )
             return None, None
 
-    df = pd.read_parquet(arq_chunks)
-    emb = np.load(arq_emb)
+    return arq_chunks, arq_emb
+
+
+@st.cache_resource(show_spinner="Carregando base em memória...")
+def carregar_base(caminho_chunks: str, caminho_embeddings: str):
+    """
+    Lê chunks.parquet e embeddings.npy do disco para a memória.
+
+    Cacheado porque a leitura de ~50 mil linhas de parquet e um array
+    grande de embeddings tem custo perceptível — não deve ser refeita a
+    cada pergunta do usuário. Não faz download aqui (isso já aconteceu
+    em preparar_arquivos_locais, fora do cache).
+    """
+    df = pd.read_parquet(caminho_chunks)
+    emb = np.load(caminho_embeddings)
 
     # Validação de integridade — chunks e embeddings devem ter o mesmo tamanho.
     # Uma divergência aqui indica download parcial ou arquivos de execuções
@@ -393,13 +415,25 @@ def analisar(pergunta, df_base, emb_base, cliente_voyage, cliente_anthropic,
 st.title("📚 Consulta aos Pareceres do CNE")
 st.caption("Análise de qualidade na educação com base nos pareceres do Conselho Nacional de Educação")
 
-df_base, emb_base = carregar_base()
+# Etapa 1 — garante os arquivos no disco local (baixa do Drive se necessário).
+# Roda fora de cache para que a barra de progresso apareça corretamente.
+arq_chunks, arq_emb = preparar_arquivos_locais()
 
-if df_base is None:
+if arq_chunks is None:
     st.info(
         "Verifique a mensagem de erro acima, ou confirme se os secrets "
         "`DRIVE_FILE_ID_CHUNKS` e `DRIVE_FILE_ID_EMBEDDINGS` estão configurados "
         "corretamente. Veja `README_app.md` para instruções."
+    )
+    st.stop()
+
+# Etapa 2 — carrega os arquivos em memória (cacheado; rápido nas execuções seguintes)
+df_base, emb_base = carregar_base(str(arq_chunks), str(arq_emb))
+
+if df_base is None:
+    st.info(
+        "Verifique a mensagem de erro acima sobre inconsistência na base. "
+        "Veja `README_app.md` para instruções."
     )
     st.stop()
 
