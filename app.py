@@ -46,6 +46,12 @@ MODELO_EMBEDDING = "voyage-4-lite"
 MODELO_LLM       = "claude-sonnet-4-6"
 TOP_K_PADRAO     = 20
 
+# IDs dos arquivos no Google Drive (extraídos do link de compartilhamento)
+# Link: https://drive.google.com/file/d/SEU_ID_AQUI/view?usp=sharing
+#                                        ^^^^^^^^^^^ isso aqui é o ID
+DRIVE_FILE_ID_CHUNKS     = "COLE_AQUI_O_ID_DO_CHUNKS_PARQUET"
+DRIVE_FILE_ID_EMBEDDINGS = "COLE_AQUI_O_ID_DO_EMBEDDINGS_NPY"
+
 PROMPT_SISTEMA = """Você é um pesquisador especialista em política educacional brasileira,
 com foco em análise de documentos normativos do Conselho Nacional de Educação (CNE).
 
@@ -84,10 +90,35 @@ VALORES_TIPO_CHUNK = {
 
 @st.cache_resource(show_spinner="Carregando base de conhecimento...")
 def carregar_base():
-    """Carrega chunks + embeddings uma única vez por sessão do servidor."""
+    """
+    Carrega chunks + embeddings uma única vez por sessão do servidor.
+
+    Se os arquivos não existirem localmente, baixa do Google Drive
+    automaticamente na primeira execução. Downloads subsequentes usam
+    o arquivo já salvo em disco — não baixa de novo a cada reinício
+    do app, apenas quando o disco do servidor é reiniciado do zero
+    (ex: redeploy no Streamlit Cloud).
+    """
     pasta = Path(PASTA_BASE)
+    pasta.mkdir(exist_ok=True)
     arq_chunks = pasta / "chunks.parquet"
     arq_emb = pasta / "embeddings.npy"
+
+    if not arq_chunks.exists() or not arq_emb.exists():
+        try:
+            import gdown
+        except ImportError:
+            st.error(
+                "Biblioteca `gdown` não instalada. Adicione `gdown` ao requirements.txt "
+                "ou rode `pip install gdown`."
+            )
+            return None, None
+
+        with st.spinner("Baixando base de conhecimento do Google Drive (primeira execução)..."):
+            if not arq_chunks.exists():
+                gdown.download(id=DRIVE_FILE_ID_CHUNKS, output=str(arq_chunks), quiet=False)
+            if not arq_emb.exists():
+                gdown.download(id=DRIVE_FILE_ID_EMBEDDINGS, output=str(arq_emb), quiet=False)
 
     if not arq_chunks.exists() or not arq_emb.exists():
         return None, None
@@ -223,10 +254,10 @@ df_base, emb_base = carregar_base()
 
 if df_base is None:
     st.error(
-        "Base de conhecimento não encontrada em `./base_cne/`.\n\n"
-        "Execute primeiro o notebook **01_indexar_cne.ipynb** para gerar a base, "
-        "e copie os arquivos `chunks.parquet` e `embeddings.npy` para a pasta `base_cne` "
-        "no mesmo diretório deste app."
+        "Não foi possível carregar a base de conhecimento.\n\n"
+        "Verifique se `DRIVE_FILE_ID_CHUNKS` e `DRIVE_FILE_ID_EMBEDDINGS` estão "
+        "configurados corretamente no topo do `app.py`, e se os arquivos no Google "
+        "Drive estão compartilhados como \"Qualquer pessoa com o link\"."
     )
     st.stop()
 
