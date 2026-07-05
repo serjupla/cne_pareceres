@@ -49,7 +49,7 @@ TOP_K_PADRAO     = 20
 # IDs dos arquivos no Google Drive (extraídos do link de compartilhamento)
 # Link: https://drive.google.com/file/d/SEU_ID_AQUI/view?usp=sharing
 #                                        ^^^^^^^^^^^ isso aqui é o ID
-DRIVE_FILE_ID_CHUNKS     = "COLE_AQUI_O_ID_DO_CHUNKS_PARQUET"
+DRIVE_FILE_ID_CHUNKS     = "1ltUM90Sz2_io8Bjl-pwqnuPYX9AJn-UZ"
 DRIVE_FILE_ID_EMBEDDINGS = "1148nlnMEVdJkCmg4wsSJ1dRSWfNtO3iA"
 
 PROMPT_SISTEMA = """Você é um pesquisador especialista em política educacional brasileira,
