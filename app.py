@@ -115,16 +115,58 @@ def carregar_base():
             return None, None
 
         with st.spinner("Baixando base de conhecimento do Google Drive (primeira execução)..."):
+            # fuzzy=True faz o gdown extrair o ID de qualquer formato de link e,
+            # principalmente, lidar corretamente com a página de confirmação que
+            # o Drive exibe para arquivos grandes (>100 MB) — sem isso, o gdown
+            # pode baixar a página HTML de aviso em vez do arquivo binário real.
             if not arq_chunks.exists():
-                gdown.download(id=DRIVE_FILE_ID_CHUNKS, output=str(arq_chunks), quiet=False)
+                gdown.download(
+                    id=DRIVE_FILE_ID_CHUNKS, output=str(arq_chunks),
+                    quiet=False, fuzzy=True,
+                )
             if not arq_emb.exists():
-                gdown.download(id=DRIVE_FILE_ID_EMBEDDINGS, output=str(arq_emb), quiet=False)
+                gdown.download(
+                    id=DRIVE_FILE_ID_EMBEDDINGS, output=str(arq_emb),
+                    quiet=False, fuzzy=True,
+                )
+
+        # Verifica se os arquivos baixados são binários válidos, não páginas HTML
+        # de aviso do Drive (sintoma: arquivo pequeno começando com "<!DOCTYPE" ou "<html")
+        for arq, nome in [(arq_chunks, "chunks.parquet"), (arq_emb, "embeddings.npy")]:
+            if arq.exists():
+                with open(arq, "rb") as f:
+                    inicio = f.read(20)
+                if inicio.strip().startswith((b"<!DOCTYPE", b"<html", b"<HTML")):
+                    arq.unlink()  # remove o arquivo corrompido
+                    st.error(
+                        f"O download de `{nome}` falhou — o Google Drive retornou uma "
+                        "página de aviso em vez do arquivo (comum em arquivos grandes). "
+                        "Recarregue a página para tentar novamente. Se persistir, veja "
+                        "`README_app.md`, seção 'Download falhando'."
+                    )
+                    return None, None
 
     if not arq_chunks.exists() or not arq_emb.exists():
         return None, None
 
     df = pd.read_parquet(arq_chunks)
     emb = np.load(arq_emb)
+
+    # Validação de integridade — detecta downloads corrompidos do Drive.
+    # Quando o Google Drive mostra o aviso de "arquivo grande, não verificado
+    # contra vírus", o gdown pode baixar essa página HTML no lugar do .npy real,
+    # resultando num arquivo pequeno e corrompido que carrega com shape errado.
+    if len(df) != emb.shape[0]:
+        st.error(
+            f"**Base corrompida detectada.** `chunks.parquet` tem {len(df)} linhas, "
+            f"mas `embeddings.npy` tem {emb.shape[0]} vetores — os números deveriam ser iguais.\n\n"
+            "Isso costuma acontecer quando o download do Google Drive falha silenciosamente "
+            "para arquivos grandes (>100 MB). Apague a pasta `base_cne/` no servidor e "
+            "reinicie o app para forçar um novo download, ou veja `README_app.md` para "
+            "a correção do download."
+        )
+        return None, None
+
     return df, emb
 
 
@@ -248,7 +290,7 @@ def analisar(pergunta, df_base, emb_base, cliente_voyage, cliente_anthropic,
 # ---------------------------------------------------------------------------
 
 st.title("📚 Consulta aos Pareceres do CNE")
-st.caption("Análise de qualidade na educação com base nos pareceres do Conselho Nacional de Educação - by Priscila Planelis (Powered by PlanIT)")
+st.caption("Análise de qualidade na educação com base nos pareceres do Conselho Nacional de Educação")
 
 df_base, emb_base = carregar_base()
 
