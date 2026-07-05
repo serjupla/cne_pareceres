@@ -49,8 +49,8 @@ TOP_K_PADRAO     = 20
 # IDs dos arquivos no Google Drive (extraídos do link de compartilhamento)
 # Link: https://drive.google.com/file/d/SEU_ID_AQUI/view?usp=sharing
 #                                        ^^^^^^^^^^^ isso aqui é o ID
-DRIVE_FILE_ID_CHUNKS     = "COLE_AQUI_O_ID_DO_CHUNKS_PARQUET"
-DRIVE_FILE_ID_EMBEDDINGS = "COLE_AQUI_O_ID_DO_EMBEDDINGS_NPY"
+DRIVE_FILE_ID_CHUNKS     = "1ltUM90Sz2_io8Bjl-pwqnuPYX9AJn-UZ"
+DRIVE_FILE_ID_EMBEDDINGS = "1148nlnMEVdJkCmg4wsSJ1dRSWfNtO3iA"
 
 PROMPT_SISTEMA = """Você é um pesquisador especialista em política educacional brasileira,
 com foco em análise de documentos normativos do Conselho Nacional de Educação (CNE).
@@ -248,7 +248,7 @@ def analisar(pergunta, df_base, emb_base, cliente_voyage, cliente_anthropic,
 # ---------------------------------------------------------------------------
 
 st.title("📚 Consulta aos Pareceres do CNE")
-st.caption("Análise de qualidade na educação com base nos pareceres do Conselho Nacional de Educação")
+st.caption("Análise de qualidade na educação com base nos pareceres do Conselho Nacional de Educação - by Priscila Planelis (Powered by PlanIT)")
 
 df_base, emb_base = carregar_base()
 
