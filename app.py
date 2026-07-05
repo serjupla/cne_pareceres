@@ -30,7 +30,7 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="Pareceres do CNE — Consulta (By Priscila Planelis)",
+    page_title="Pareceres do CNE — Consulta",
     page_icon="📚",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -49,8 +49,8 @@ TOP_K_PADRAO     = 20
 # IDs dos arquivos no Google Drive (extraídos do link de compartilhamento)
 # Link: https://drive.google.com/file/d/SEU_ID_AQUI/view?usp=sharing
 #                                        ^^^^^^^^^^^ isso aqui é o ID
-DRIVE_FILE_ID_CHUNKS     = "1ltUM90Sz2_io8Bjl-pwqnuPYX9AJn-UZ"
-DRIVE_FILE_ID_EMBEDDINGS = "1148nlnMEVdJkCmg4wsSJ1dRSWfNtO3iA"
+DRIVE_FILE_ID_CHUNKS     = "COLE_AQUI_O_ID_DO_CHUNKS_PARQUET"
+DRIVE_FILE_ID_EMBEDDINGS = "COLE_AQUI_O_ID_DO_EMBEDDINGS_NPY"
 
 PROMPT_SISTEMA = """Você é um pesquisador especialista em política educacional brasileira,
 com foco em análise de documentos normativos do Conselho Nacional de Educação (CNE).
@@ -264,11 +264,19 @@ if df_base is None:
 with st.sidebar:
     st.header("⚙️ Configuração")
 
-    with st.expander("Chaves de API", expanded=True):
-        voyage_key = st.text_input("Chave Voyage AI", type="password", help="Obtenha em voyageai.com")
-        anthropic_key = st.text_input("Chave Anthropic", type="password", help="Obtenha em console.anthropic.com")
+    # As chaves de API vêm de st.secrets (arquivo .streamlit/secrets.toml local,
+    # ou painel de Secrets no Streamlit Cloud) — nunca ficam visíveis na tela
+    # nem são digitadas pelo usuário. Veja README_app.md para configurar.
+    voyage_key = st.secrets.get("VOYAGE_API_KEY", "")
+    anthropic_key = st.secrets.get("ANTHROPIC_API_KEY", "")
 
-    st.divider()
+    if voyage_key and anthropic_key:
+        st.success("✓ Chaves de API carregadas")
+    else:
+        st.error(
+            "Chaves de API não configuradas. Veja `README_app.md` "
+            "para instruções de como configurar o arquivo de secrets."
+        )
     st.header("🔍 Filtros de pesquisa")
 
     camara_sel = st.selectbox(
@@ -328,7 +336,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 
 if not voyage_key or not anthropic_key:
-    st.info("👈 Insira suas chaves de API na barra lateral para começar a fazer perguntas.")
+    st.info("Configure as chaves de API nos *secrets* do Streamlit para começar a fazer perguntas. Veja `README_app.md`.")
     st.stop()
 
 cliente_voyage, cliente_anthropic = carregar_clientes(voyage_key, anthropic_key)
