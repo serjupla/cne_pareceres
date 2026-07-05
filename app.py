@@ -30,7 +30,7 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="Pareceres do CNE — Consulta",
+    page_title="Pareceres do CNE — Consulta (By Priscila Planelis)",
     page_icon="📚",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -50,7 +50,7 @@ TOP_K_PADRAO     = 20
 # Link: https://drive.google.com/file/d/SEU_ID_AQUI/view?usp=sharing
 #                                        ^^^^^^^^^^^ isso aqui é o ID
 DRIVE_FILE_ID_CHUNKS     = "COLE_AQUI_O_ID_DO_CHUNKS_PARQUET"
-DRIVE_FILE_ID_EMBEDDINGS = "COLE_AQUI_O_ID_DO_EMBEDDINGS_NPY"
+DRIVE_FILE_ID_EMBEDDINGS = "1148nlnMEVdJkCmg4wsSJ1dRSWfNtO3iA"
 
 PROMPT_SISTEMA = """Você é um pesquisador especialista em política educacional brasileira,
 com foco em análise de documentos normativos do Conselho Nacional de Educação (CNE).
