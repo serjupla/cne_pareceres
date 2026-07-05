@@ -4,17 +4,18 @@ app.py — Interface Streamlit para consulta aos pareceres do CNE
 Interface web amigável para pesquisadores sem experiência em Python.
 
 Como rodar localmente:
-    pip install streamlit anthropic voyageai pandas numpy pyarrow
+    pip install streamlit anthropic voyageai pandas numpy pyarrow requests
     streamlit run app.py
 
 Como rodar a partir do Google Colab (com túnel público):
-    !pip install streamlit anthropic voyageai pandas numpy pyarrow pyngrok -q
+    !pip install streamlit anthropic voyageai pandas numpy pyarrow requests pyngrok -q
     !streamlit run app.py &>/content/logs.txt &
     from pyngrok import ngrok
     print(ngrok.connect(8501))
 
 Pré-requisito: a base de conhecimento (chunks.parquet + embeddings.npy)
-já deve ter sido gerada pelo notebook 01_indexar_cne.ipynb.
+já deve ter sido gerada pelo notebook 01_indexar_cne.ipynb, e os IDs dos
+arquivos no Google Drive configurados nos secrets — veja README_app.md.
 """
 
 import json
@@ -45,12 +46,6 @@ PASTA_RESULTADOS = "./resultados_cne"    # onde salvar as análises geradas
 MODELO_EMBEDDING = "voyage-4-lite"
 MODELO_LLM       = "claude-sonnet-4-6"
 TOP_K_PADRAO     = 20
-
-# IDs dos arquivos no Google Drive (extraídos do link de compartilhamento)
-# Link: https://drive.google.com/file/d/SEU_ID_AQUI/view?usp=sharing
-#                                        ^^^^^^^^^^^ isso aqui é o ID
-DRIVE_FILE_ID_CHUNKS     = "1ltUM90Sz2_io8Bjl-pwqnuPYX9AJn-UZ"
-DRIVE_FILE_ID_EMBEDDINGS = "1148nlnMEVdJkCmg4wsSJ1dRSWfNtO3iA"
 
 PROMPT_SISTEMA = """Você é um pesquisador especialista em política educacional brasileira,
 com foco em análise de documentos normativos do Conselho Nacional de Educação (CNE).
@@ -88,82 +83,125 @@ VALORES_TIPO_CHUNK = {
 # CARREGAMENTO DA BASE — cacheado para não recarregar a cada interação
 # ---------------------------------------------------------------------------
 
+def _baixar_arquivo_drive(file_id: str, destino: Path) -> bool:
+    """
+    Baixa um arquivo público do Google Drive para `destino`.
+
+    Implementação manual (sem depender do gdown) porque arquivos grandes
+    (>100 MB, caso do embeddings.npy) fazem o Drive exibir uma página de
+    aviso ("não foi possível verificar vírus") em vez do binário direto.
+    Essa função trata o token de confirmação exigido nesse caso.
+
+    Retorna True se o download foi bem-sucedido e o conteúdo é binário
+    válido (não uma página HTML de aviso).
+    """
+    import requests
+
+    URL = "https://drive.google.com/uc?export=download"
+    session = requests.Session()
+
+    resposta = session.get(URL, params={"id": file_id}, stream=True)
+
+    # Procura o token de confirmação nos cookies (arquivos médios/grandes)
+    token = None
+    for chave, valor in resposta.cookies.items():
+        if chave.startswith("download_warning"):
+            token = valor
+            break
+
+    # Arquivos muito grandes exigem buscar o token dentro do HTML retornado,
+    # em vez do cookie — formato mudou nas versões mais recentes do Drive
+    if token is None and "text/html" in resposta.headers.get("Content-Type", ""):
+        import re
+        match = re.search(r'confirm=([0-9A-Za-z_-]+)', resposta.text)
+        if match:
+            token = match.group(1)
+
+    if token:
+        resposta = session.get(URL, params={"id": file_id, "confirm": token}, stream=True)
+
+    # Verifica se o conteúdo é realmente binário e não uma página de aviso
+    content_type = resposta.headers.get("Content-Type", "")
+    if "text/html" in content_type:
+        return False
+
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    with open(destino, "wb") as f:
+        for chunk in resposta.iter_content(chunk_size=32768):
+            if chunk:
+                f.write(chunk)
+
+    # Confirmação final: os primeiros bytes não podem ser marcação HTML
+    with open(destino, "rb") as f:
+        inicio = f.read(20)
+    if inicio.strip().startswith((b"<!DOCTYPE", b"<html", b"<HTML")):
+        destino.unlink()
+        return False
+
+    return True
+
+
 @st.cache_resource(show_spinner="Carregando base de conhecimento...")
 def carregar_base():
     """
     Carrega chunks + embeddings uma única vez por sessão do servidor.
 
-    Se os arquivos não existirem localmente, baixa do Google Drive
-    automaticamente na primeira execução. Downloads subsequentes usam
-    o arquivo já salvo em disco — não baixa de novo a cada reinício
-    do app, apenas quando o disco do servidor é reiniciado do zero
-    (ex: redeploy no Streamlit Cloud).
+    Os IDs dos arquivos no Google Drive vêm de st.secrets (nunca ficam
+    hardcoded no código-fonte). Se os arquivos não existirem localmente,
+    baixa do Drive automaticamente na primeira execução. Downloads
+    subsequentes usam o arquivo já salvo em disco.
     """
+    drive_id_chunks = st.secrets.get("DRIVE_FILE_ID_CHUNKS", "")
+    drive_id_embeddings = st.secrets.get("DRIVE_FILE_ID_EMBEDDINGS", "")
+
+    if not drive_id_chunks or not drive_id_embeddings:
+        st.error(
+            "IDs dos arquivos do Google Drive não configurados nos secrets. "
+            "Adicione `DRIVE_FILE_ID_CHUNKS` e `DRIVE_FILE_ID_EMBEDDINGS` ao "
+            "arquivo de secrets — veja `README_app.md`."
+        )
+        return None, None
+
     pasta = Path(PASTA_BASE)
     pasta.mkdir(exist_ok=True)
     arq_chunks = pasta / "chunks.parquet"
     arq_emb = pasta / "embeddings.npy"
 
-    if not arq_chunks.exists() or not arq_emb.exists():
-        try:
-            import gdown
-        except ImportError:
-            st.error(
-                "Biblioteca `gdown` não instalada. Adicione `gdown` ao requirements.txt "
-                "ou rode `pip install gdown`."
-            )
-            return None, None
-
-        with st.spinner("Baixando base de conhecimento do Google Drive (primeira execução)..."):
-            # fuzzy=True faz o gdown extrair o ID de qualquer formato de link e,
-            # principalmente, lidar corretamente com a página de confirmação que
-            # o Drive exibe para arquivos grandes (>100 MB) — sem isso, o gdown
-            # pode baixar a página HTML de aviso em vez do arquivo binário real.
-            if not arq_chunks.exists():
-                gdown.download(
-                    id=DRIVE_FILE_ID_CHUNKS, output=str(arq_chunks),
-                    quiet=False, fuzzy=True,
+    if not arq_chunks.exists():
+        with st.spinner("Baixando chunks.parquet do Google Drive..."):
+            if not _baixar_arquivo_drive(drive_id_chunks, arq_chunks):
+                st.error(
+                    "Falha ao baixar `chunks.parquet` do Google Drive. "
+                    "Verifique se o arquivo está compartilhado como "
+                    "\"Qualquer pessoa com o link\" e se o ID em `DRIVE_FILE_ID_CHUNKS` "
+                    "está correto."
                 )
-            if not arq_emb.exists():
-                gdown.download(
-                    id=DRIVE_FILE_ID_EMBEDDINGS, output=str(arq_emb),
-                    quiet=False, fuzzy=True,
+                return None, None
+
+    if not arq_emb.exists():
+        with st.spinner("Baixando embeddings.npy do Google Drive (arquivo grande, pode levar alguns minutos)..."):
+            if not _baixar_arquivo_drive(drive_id_embeddings, arq_emb):
+                st.error(
+                    "Falha ao baixar `embeddings.npy` do Google Drive. "
+                    "Verifique se o arquivo está compartilhado como "
+                    "\"Qualquer pessoa com o link\" e se o ID em `DRIVE_FILE_ID_EMBEDDINGS` "
+                    "está correto."
                 )
-
-        # Verifica se os arquivos baixados são binários válidos, não páginas HTML
-        # de aviso do Drive (sintoma: arquivo pequeno começando com "<!DOCTYPE" ou "<html")
-        for arq, nome in [(arq_chunks, "chunks.parquet"), (arq_emb, "embeddings.npy")]:
-            if arq.exists():
-                with open(arq, "rb") as f:
-                    inicio = f.read(20)
-                if inicio.strip().startswith((b"<!DOCTYPE", b"<html", b"<HTML")):
-                    arq.unlink()  # remove o arquivo corrompido
-                    st.error(
-                        f"O download de `{nome}` falhou — o Google Drive retornou uma "
-                        "página de aviso em vez do arquivo (comum em arquivos grandes). "
-                        "Recarregue a página para tentar novamente. Se persistir, veja "
-                        "`README_app.md`, seção 'Download falhando'."
-                    )
-                    return None, None
-
-    if not arq_chunks.exists() or not arq_emb.exists():
-        return None, None
+                return None, None
 
     df = pd.read_parquet(arq_chunks)
     emb = np.load(arq_emb)
 
-    # Validação de integridade — detecta downloads corrompidos do Drive.
-    # Quando o Google Drive mostra o aviso de "arquivo grande, não verificado
-    # contra vírus", o gdown pode baixar essa página HTML no lugar do .npy real,
-    # resultando num arquivo pequeno e corrompido que carrega com shape errado.
+    # Validação de integridade — chunks e embeddings devem ter o mesmo tamanho.
+    # Uma divergência aqui indica download parcial ou arquivos de execuções
+    # diferentes do notebook de indexação.
     if len(df) != emb.shape[0]:
         st.error(
-            f"**Base corrompida detectada.** `chunks.parquet` tem {len(df)} linhas, "
-            f"mas `embeddings.npy` tem {emb.shape[0]} vetores — os números deveriam ser iguais.\n\n"
-            "Isso costuma acontecer quando o download do Google Drive falha silenciosamente "
-            "para arquivos grandes (>100 MB). Apague a pasta `base_cne/` no servidor e "
-            "reinicie o app para forçar um novo download, ou veja `README_app.md` para "
-            "a correção do download."
+            f"**Base inconsistente.** `chunks.parquet` tem {len(df)} linhas, mas "
+            f"`embeddings.npy` tem {emb.shape[0]} vetores — deveriam ser iguais.\n\n"
+            "Apague a pasta `base_cne/` no servidor e reinicie o app para forçar "
+            "um novo download. Se persistir, os dois arquivos podem ser de execuções "
+            "diferentes do notebook de indexação — gere-os novamente juntos."
         )
         return None, None
 
@@ -295,11 +333,10 @@ st.caption("Análise de qualidade na educação com base nos pareceres do Consel
 df_base, emb_base = carregar_base()
 
 if df_base is None:
-    st.error(
-        "Não foi possível carregar a base de conhecimento.\n\n"
-        "Verifique se `DRIVE_FILE_ID_CHUNKS` e `DRIVE_FILE_ID_EMBEDDINGS` estão "
-        "configurados corretamente no topo do `app.py`, e se os arquivos no Google "
-        "Drive estão compartilhados como \"Qualquer pessoa com o link\"."
+    st.info(
+        "Verifique a mensagem de erro acima, ou confirme se os secrets "
+        "`DRIVE_FILE_ID_CHUNKS` e `DRIVE_FILE_ID_EMBEDDINGS` estão configurados "
+        "corretamente. Veja `README_app.md` para instruções."
     )
     st.stop()
 

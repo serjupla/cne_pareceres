@@ -7,21 +7,34 @@ Interface web (Streamlit) para pesquisadores fazerem perguntas sobre os parecere
 1. Ter executado o notebook `01_indexar_cne.ipynb` e gerado a base de conhecimento
 2. Ter em mãos as chaves de API do [Voyage AI](https://voyageai.com) e da [Anthropic](https://console.anthropic.com)
 
-## Passo 0 — Configurar as chaves de API com segurança
+## Passo 0 — Configurar chaves e IDs do Drive com segurança
 
-As chaves **nunca** devem ser digitadas na interface nem ficar visíveis no código.
-O Streamlit tem um sistema próprio de *secrets* para isso.
+As chaves de API e os IDs dos arquivos do Google Drive **nunca** devem ficar
+escritos no código nem visíveis na interface. O Streamlit tem um sistema
+próprio de *secrets* para isso — tudo fica num único lugar.
+
+### Descobrir os IDs dos arquivos no Drive
+
+1. No Google Drive, clique com o botão direito em `chunks.parquet` → **Compartilhar** →
+   **Qualquer pessoa com o link** → copie o link
+2. Repita para `embeddings.npy`
+3. Cada link tem este formato:
+   ```
+   https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz/view?usp=sharing
+   ```
+   O trecho entre `/d/` e `/view` é o **ID do arquivo**.
 
 ### Rodando localmente ou no Colab
 
 1. Crie uma pasta chamada `.streamlit` no mesmo diretório do `app.py`
-2. Dentro dela, crie um arquivo chamado `secrets.toml` com este conteúdo:
+2. Dentro dela, crie um arquivo chamado `secrets.toml` com este conteúdo
+   (use o `secrets.toml.example` incluído como modelo):
    ```toml
    VOYAGE_API_KEY = "sua-chave-voyage-aqui"
    ANTHROPIC_API_KEY = "sua-chave-anthropic-aqui"
+   DRIVE_FILE_ID_CHUNKS = "1AbCdEfGhIjKlMnOpQrStUvWxYz"
+   DRIVE_FILE_ID_EMBEDDINGS = "1XyZ9876543210AbCdEfGhIjKl"
    ```
-   (Use o arquivo `secrets.toml.example` incluído como modelo — só renomear e preencher.)
-
 3. O `.gitignore` incluído já impede que esse arquivo suba para o GitHub por engano.
 
 Estrutura final:
@@ -30,7 +43,7 @@ projeto_cne/
 ├── app.py
 ├── .gitignore
 ├── .streamlit/
-│   └── secrets.toml       ← suas chaves reais, nunca vai para o GitHub
+│   └── secrets.toml       ← seus dados reais, nunca vai para o GitHub
 └── secrets.toml.example   ← modelo, esse pode ir para o GitHub
 ```
 
@@ -40,35 +53,17 @@ Não crie o arquivo `secrets.toml` manualmente — o próprio painel do Streamli
 tem um campo para colar os *secrets*:
 
 1. No painel do seu app em [share.streamlit.io](https://share.streamlit.io), clique em **Settings → Secrets**
-2. Cole o mesmo conteúdo TOML:
-   ```toml
-   VOYAGE_API_KEY = "sua-chave-voyage-aqui"
-   ANTHROPIC_API_KEY = "sua-chave-anthropic-aqui"
-   ```
-3. Salve — o app reinicia automaticamente com as chaves disponíveis
+2. Cole o mesmo conteúdo TOML mostrado acima
+3. Salve — o app reinicia automaticamente com tudo disponível
 
-Com isso, quem acessa o app pelo link **nunca vê as chaves**, apenas faz perguntas.
-Você mantém controle total sobre o uso e o custo da API.
+Com isso, quem acessa o app pelo link **nunca vê as chaves nem os IDs**, apenas faz perguntas.
 
 ## Passo 1 — Compartilhar a base no Google Drive
 
 O arquivo `embeddings.npy` costuma passar de 100 MB, o que o GitHub não aceita em push normal.
 A solução é deixá-lo no Google Drive e o app baixa automaticamente na primeira execução.
-
-1. No Google Drive, clique com o botão direito em `chunks.parquet` → **Compartilhar** →
-   **Qualquer pessoa com o link** → copie o link
-2. Repita para `embeddings.npy`
-3. Cada link tem este formato:
-   ```
-   https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz/view?usp=sharing
-   ```
-   O trecho entre `/d/` e `/view` é o **ID do arquivo** — é isso que você precisa.
-
-4. Abra o `app.py` e cole os dois IDs no topo do arquivo:
-   ```python
-   DRIVE_FILE_ID_CHUNKS     = "1AbCdEfGhIjKlMnOpQrStUvWxYz"
-   DRIVE_FILE_ID_EMBEDDINGS = "1XyZ9876543210AbCdEfGhIjKl"
-   ```
+Certifique-se de que ambos os arquivos estão compartilhados como **"Qualquer pessoa com o link"**
+e que você já colocou os IDs deles nos secrets (Passo 0 acima).
 
 > Na primeira vez que alguém abrir o app, ele baixa os arquivos do Drive e salva em
 > `./base_cne/` no servidor. Nas execuções seguintes, usa o arquivo já salvo — não
@@ -77,7 +72,7 @@ A solução é deixá-lo no Google Drive e o app baixa automaticamente na primei
 ## Passo 2 — Instalar dependências
 
 ```bash
-pip install streamlit anthropic voyageai pandas numpy pyarrow gdown
+pip install streamlit anthropic voyageai pandas numpy pyarrow requests
 ```
 
 ## Passo 3 — Rodar o app
@@ -86,7 +81,9 @@ pip install streamlit anthropic voyageai pandas numpy pyarrow gdown
 streamlit run app.py
 ```
 
-Uma aba do navegador abre automaticamente em `http://localhost:8501`. Insira suas chaves de API na barra lateral e comece a fazer perguntas.
+Uma aba do navegador abre automaticamente em `http://localhost:8501`. O app carrega
+as chaves e os IDs do Drive automaticamente dos secrets — basta abrir e começar a
+fazer perguntas.
 
 ---
 
@@ -94,7 +91,7 @@ Uma aba do navegador abre automaticamente em `http://localhost:8501`. Insira sua
 
 ```python
 # Célula 1 — instalar dependências
-!pip install streamlit anthropic voyageai pandas numpy pyarrow gdown pyngrok -q
+!pip install streamlit anthropic voyageai pandas numpy pyarrow requests pyngrok -q
 
 # Célula 2 — copiar o app.py e o secrets.toml (a base é baixada automaticamente do Drive)
 from google.colab import drive
@@ -128,11 +125,11 @@ Para deixar o app acessível permanentemente, sem depender do Colab:
    pandas
    numpy
    pyarrow
-   gdown
+   requests
    ```
 2. Acesse [share.streamlit.io](https://share.streamlit.io), conecte sua conta GitHub
 3. Selecione o repositório e clique em "Deploy"
-4. As chaves de API podem ser configuradas como *secrets* no painel do Streamlit Cloud, em vez de digitadas manualmente pelo usuário
+4. Configure os *secrets* (chaves de API + IDs do Drive) no painel do Streamlit Cloud — veja Passo 0
 
 ### Sobre os limites do Google Drive
 
@@ -146,21 +143,21 @@ ou o Hugging Face Hub (que aceita arquivos grandes gratuitamente e não tem esse
 ### Download falhando (arquivo corrompido)
 
 Arquivos maiores que 100 MB — o caso típico do `embeddings.npy` — passam por uma
-página de aviso do Google Drive ("não foi possível verificar vírus"). O app já lida
-com isso automaticamente (usa `fuzzy=True` no gdown e verifica se o conteúdo baixado
-é HTML por engano), mas se ainda assim o erro `chunks.parquet tem X linhas, mas
-embeddings.npy tem Y vetores` aparecer:
+página de aviso do Google Drive ("não foi possível verificar vírus"). O app trata
+esse caso automaticamente: extrai o token de confirmação exigido pelo Drive e
+verifica se o conteúdo baixado é binário válido, não uma página HTML de aviso.
+Mesmo assim, se o erro `chunks.parquet tem X linhas, mas embeddings.npy tem Y
+vetores` aparecer:
 
 1. Apague a pasta `base_cne/` no ambiente onde o app roda (no Colab: `!rm -rf base_cne`)
 2. Recarregue a página do app para forçar um novo download
-3. Se persistir, o problema pode ser o link de compartilhamento do Drive — confirme
-   que está como "Qualquer pessoa com o link" e que o ID copiado é o do arquivo
-   `embeddings.npy` (não de uma pasta)
+3. Confirme que ambos os arquivos estão como "Qualquer pessoa com o link" e que
+   os IDs em `DRIVE_FILE_ID_CHUNKS` / `DRIVE_FILE_ID_EMBEDDINGS` nos secrets
+   correspondem aos arquivos certos (não a uma pasta)
 
-Se o problema continuar mesmo assim, a alternativa mais robusta é hospedar o
-`embeddings.npy` no [Hugging Face Hub](https://huggingface.co/docs/hub/datasets-adding)
-como dataset — ele foi feito especificamente para arquivos binários grandes e não tem
-o problema da página de confirmação do Drive.
+Se o problema continuar, a alternativa mais robusta é hospedar o `embeddings.npy`
+no [Hugging Face Hub](https://huggingface.co/docs/hub/datasets-adding) como dataset —
+feito especificamente para arquivos binários grandes, sem os limites do Drive.
 
 ---
 
