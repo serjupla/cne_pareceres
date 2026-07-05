@@ -90,39 +90,70 @@ def _baixar_arquivo_drive(file_id: str, destino: Path) -> bool:
     Implementação manual (sem depender do gdown) porque arquivos grandes
     (>100 MB, caso do embeddings.npy) fazem o Drive exibir uma página de
     aviso ("não foi possível verificar vírus") em vez do binário direto.
-    Essa função trata o token de confirmação exigido nesse caso.
+
+    O Drive usa dois formatos de confirmação diferentes dependendo do
+    tamanho do arquivo e da versão do endpoint:
+      1. Cookie "download_warning_..." + parâmetro confirm na mesma URL
+      2. Página HTML com um <form> contendo campos ocultos (id, confirm,
+         uuid, etc.) que precisam ser reenviados para uma URL diferente
+         (drive.usercontent.google.com) — formato mais recente, usado
+         para arquivos grandes.
 
     Retorna True se o download foi bem-sucedido e o conteúdo é binário
     válido (não uma página HTML de aviso).
     """
+    import re
     import requests
+
+    def eh_html(resp) -> bool:
+        return "text/html" in resp.headers.get("Content-Type", "")
 
     URL = "https://drive.google.com/uc?export=download"
     session = requests.Session()
 
     resposta = session.get(URL, params={"id": file_id}, stream=True)
 
-    # Procura o token de confirmação nos cookies (arquivos médios/grandes)
-    token = None
-    for chave, valor in resposta.cookies.items():
-        if chave.startswith("download_warning"):
-            token = valor
-            break
+    if eh_html(resposta):
+        # Formato 1 (mais antigo): token vem num cookie de aviso
+        token = None
+        for chave, valor in resposta.cookies.items():
+            if chave.startswith("download_warning"):
+                token = valor
+                break
 
-    # Arquivos muito grandes exigem buscar o token dentro do HTML retornado,
-    # em vez do cookie — formato mudou nas versões mais recentes do Drive
-    if token is None and "text/html" in resposta.headers.get("Content-Type", ""):
-        import re
-        match = re.search(r'confirm=([0-9A-Za-z_-]+)', resposta.text)
-        if match:
-            token = match.group(1)
+        if token:
+            resposta = session.get(URL, params={"id": file_id, "confirm": token}, stream=True)
 
-    if token:
-        resposta = session.get(URL, params={"id": file_id, "confirm": token}, stream=True)
+    if eh_html(resposta):
+        # Formato 2 (atual): a página HTML traz um <form> com campos ocultos
+        # que precisam ser reenviados como querystring para a action do form.
+        html = resposta.text
+        action_match = re.search(r'<form[^>]+action="([^"]+)"', html)
 
-    # Verifica se o conteúdo é realmente binário e não uma página de aviso
-    content_type = resposta.headers.get("Content-Type", "")
-    if "text/html" in content_type:
+        if action_match:
+            action_url = action_match.group(1).replace("&amp;", "&")
+
+            campos = {}
+            for tag_match in re.finditer(r"<input\b[^>]*>", html):
+                tag = tag_match.group(0)
+                nome_match = re.search(r'name="([^"]+)"', tag)
+                valor_match = re.search(r'value="([^"]*)"', tag)
+                if nome_match:
+                    campos[nome_match.group(1)] = valor_match.group(1) if valor_match else ""
+
+            if campos:
+                resposta = session.get(action_url, params=campos, stream=True)
+
+    if eh_html(resposta):
+        # Nenhuma das duas estratégias funcionou. Verifica se a página HTML
+        # contém uma mensagem específica do Drive (arquivo não encontrado,
+        # sem permissão, etc.) para facilitar o diagnóstico.
+        html_final = resposta.text.lower()
+        if "cannot be viewed" in html_final or "does not exist" in html_final or "acesso negado" in html_final:
+            raise ValueError(
+                f"O Google Drive recusou o acesso ao arquivo (ID: {file_id}). "
+                "Verifique se ele está compartilhado como \"Qualquer pessoa com o link\"."
+            )
         return False
 
     destino.parent.mkdir(parents=True, exist_ok=True)
@@ -169,7 +200,12 @@ def carregar_base():
 
     if not arq_chunks.exists():
         with st.spinner("Baixando chunks.parquet do Google Drive..."):
-            if not _baixar_arquivo_drive(drive_id_chunks, arq_chunks):
+            try:
+                sucesso = _baixar_arquivo_drive(drive_id_chunks, arq_chunks)
+            except ValueError as e:
+                st.error(str(e))
+                return None, None
+            if not sucesso:
                 st.error(
                     "Falha ao baixar `chunks.parquet` do Google Drive. "
                     "Verifique se o arquivo está compartilhado como "
@@ -180,7 +216,12 @@ def carregar_base():
 
     if not arq_emb.exists():
         with st.spinner("Baixando embeddings.npy do Google Drive (arquivo grande, pode levar alguns minutos)..."):
-            if not _baixar_arquivo_drive(drive_id_embeddings, arq_emb):
+            try:
+                sucesso = _baixar_arquivo_drive(drive_id_embeddings, arq_emb)
+            except ValueError as e:
+                st.error(str(e))
+                return None, None
+            if not sucesso:
                 st.error(
                     "Falha ao baixar `embeddings.npy` do Google Drive. "
                     "Verifique se o arquivo está compartilhado como "
