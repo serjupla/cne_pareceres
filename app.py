@@ -83,9 +83,10 @@ VALORES_TIPO_CHUNK = {
 # CARREGAMENTO DA BASE — cacheado para não recarregar a cada interação
 # ---------------------------------------------------------------------------
 
-def _baixar_arquivo_drive(file_id: str, destino: Path) -> bool:
+def _baixar_arquivo_drive(file_id: str, destino: Path, rotulo: str = "arquivo") -> bool:
     """
-    Baixa um arquivo público do Google Drive para `destino`.
+    Baixa um arquivo público do Google Drive para `destino`, exibindo uma
+    barra de progresso com a porcentagem concluída.
 
     Implementação manual (sem depender do gdown) porque arquivos grandes
     (>100 MB, caso do embeddings.npy) fazem o Drive exibir uma página de
@@ -156,11 +157,34 @@ def _baixar_arquivo_drive(file_id: str, destino: Path) -> bool:
             )
         return False
 
+    # ── Download com barra de progresso ──────────────────────────────────
+    total_bytes = int(resposta.headers.get("Content-Length", 0))
+    baixado_bytes = 0
+    barra = st.progress(0.0, text=f"Baixando {rotulo}... 0%")
+
     destino.parent.mkdir(parents=True, exist_ok=True)
     with open(destino, "wb") as f:
-        for chunk in resposta.iter_content(chunk_size=32768):
-            if chunk:
-                f.write(chunk)
+        for chunk in resposta.iter_content(chunk_size=262144):  # 256 KB por chunk
+            if not chunk:
+                continue
+            f.write(chunk)
+            baixado_bytes += len(chunk)
+
+            if total_bytes > 0:
+                fracao = min(baixado_bytes / total_bytes, 1.0)
+                mb_baixado = baixado_bytes / (1024 * 1024)
+                mb_total = total_bytes / (1024 * 1024)
+                barra.progress(
+                    fracao,
+                    text=f"Baixando {rotulo}... {fracao * 100:.0f}% ({mb_baixado:.1f} MB / {mb_total:.1f} MB)",
+                )
+            else:
+                # Alguns downloads não informam o tamanho total no cabeçalho —
+                # nesse caso mostra apenas os MB já baixados, sem porcentagem
+                mb_baixado = baixado_bytes / (1024 * 1024)
+                barra.progress(0.0, text=f"Baixando {rotulo}... {mb_baixado:.1f} MB baixados")
+
+    barra.empty()
 
     # Confirmação final: os primeiros bytes não podem ser marcação HTML
     with open(destino, "rb") as f:
@@ -199,36 +223,34 @@ def carregar_base():
     arq_emb = pasta / "embeddings.npy"
 
     if not arq_chunks.exists():
-        with st.spinner("Baixando chunks.parquet do Google Drive..."):
-            try:
-                sucesso = _baixar_arquivo_drive(drive_id_chunks, arq_chunks)
-            except ValueError as e:
-                st.error(str(e))
-                return None, None
-            if not sucesso:
-                st.error(
-                    "Falha ao baixar `chunks.parquet` do Google Drive. "
-                    "Verifique se o arquivo está compartilhado como "
-                    "\"Qualquer pessoa com o link\" e se o ID em `DRIVE_FILE_ID_CHUNKS` "
-                    "está correto."
-                )
-                return None, None
+        try:
+            sucesso = _baixar_arquivo_drive(drive_id_chunks, arq_chunks, rotulo="chunks.parquet")
+        except ValueError as e:
+            st.error(str(e))
+            return None, None
+        if not sucesso:
+            st.error(
+                "Falha ao baixar `chunks.parquet` do Google Drive. "
+                "Verifique se o arquivo está compartilhado como "
+                "\"Qualquer pessoa com o link\" e se o ID em `DRIVE_FILE_ID_CHUNKS` "
+                "está correto."
+            )
+            return None, None
 
     if not arq_emb.exists():
-        with st.spinner("Baixando embeddings.npy do Google Drive (arquivo grande, pode levar alguns minutos)..."):
-            try:
-                sucesso = _baixar_arquivo_drive(drive_id_embeddings, arq_emb)
-            except ValueError as e:
-                st.error(str(e))
-                return None, None
-            if not sucesso:
-                st.error(
-                    "Falha ao baixar `embeddings.npy` do Google Drive. "
-                    "Verifique se o arquivo está compartilhado como "
-                    "\"Qualquer pessoa com o link\" e se o ID em `DRIVE_FILE_ID_EMBEDDINGS` "
-                    "está correto."
-                )
-                return None, None
+        try:
+            sucesso = _baixar_arquivo_drive(drive_id_embeddings, arq_emb, rotulo="embeddings.npy")
+        except ValueError as e:
+            st.error(str(e))
+            return None, None
+        if not sucesso:
+            st.error(
+                "Falha ao baixar `embeddings.npy` do Google Drive. "
+                "Verifique se o arquivo está compartilhado como "
+                "\"Qualquer pessoa com o link\" e se o ID em `DRIVE_FILE_ID_EMBEDDINGS` "
+                "está correto."
+            )
+            return None, None
 
     df = pd.read_parquet(arq_chunks)
     emb = np.load(arq_emb)
